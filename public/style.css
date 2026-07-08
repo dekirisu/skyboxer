@@ -68,6 +68,7 @@ h1 {
     animation: border-rotate 4s linear infinite;
     opacity: 0.3;
     transition: opacity 0.3s;
+    pointer-events: none;
 }
 
 .upload-content:hover::before {
