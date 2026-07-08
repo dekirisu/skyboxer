@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/skyboxer", "crates/skyboxer-wasm", "crates/server"]
+resolver = "2"
+
+[workspace.dependencies]
+image = { version = "0.25", default-features = false, features = [ "png", "jpeg" ] }
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+panic = "abort"
+strip = true
+debug = false
+codegen-units = 1

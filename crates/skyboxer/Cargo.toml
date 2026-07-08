@@ -1,0 +1,9 @@
+[package]
+name = "skyboxer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+deki_macros = "0.2"
+image = { workspace = true }
+

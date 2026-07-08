@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skyboxer</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }
+    </script>
+</head>
+<body>
+    <div class="screen1">
+        <h1>Skyboxer</h1>
+        <p class="subtitle">Equirectangular panorama → skybox converter</p>
+
+        <!-- Upload -->
+        <div class="upload-area" id="upload-area">
+        <div class="upload-content">
+            <h2>Upload a panorama image</h2>
+            <p class="upload-desc">Load an equirectangular panorama to generate a skybox. Works best with 2:1 ratio images.</p>
+            <button class="btn btn-primary" id="btn-upload">Open Image</button>
+            <label class="enhance-label">
+                <input type="checkbox" id="enhance-check" checked>
+                Enhance (upscale + sharpen)
+            </label>
+            <input type="file" id="file-input" accept="image/*">
+        </div>
+    </div>
+    </div>
+
+    <div class="status hidden" id="status"></div>
+
+    <!-- Main workspace (hidden until image loaded) -->
+    <div class="workspace hidden" id="workspace">
+        <div class="workspace-body">
+            <!-- Preview -->
+            <div class="preview-container">
+                <div class="preview-topbar">
+                    <span class="preview-title" id="workspace-title">Skybox</span>
+                    <div class="preview-actions">
+                        <button class="btn btn-small" id="btn-new">New</button>
+                        <button class="btn btn-small" id="btn-3d-view" disabled>🌐 3D</button>
+                        <button class="btn btn-small" id="btn-download" disabled>💾 Download</button>
+                    </div>
+                </div>
+                <img id="preview-img" class="hidden" alt="Preview">
+            </div>
+
+            <!-- Side panel (filters + skybox settings) -->
+            <div class="side-panel" id="side-panel">
+                <div class="side-panel-tabs">
+                    <button class="tab-btn active" data-tab="skybox">☁️ Skybox</button>
+                    <button class="tab-btn" data-tab="filters">🎨 Filters</button>
+                </div>
+
+                <!-- Skybox tab -->
+                <div class="tab-content active" id="tab-skybox">
+                    <div class="filters-grid">
+                        <div class="filter-group">
+                            <label>Format</label>
+                            <select id="skybox-format">
+                                <option value="unity" selected>Cross (Unity)</option>
+                                <option value="bevy">Stripe (Bevy)</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Rotation</label>
+                            <input type="range" id="skybox-rotation" min="0" max="6.283" value="0" step="0.01">
+                            <div class="range-labels">
+                                <span>0</span>
+                                <span>π</span>
+                                <span>2π</span>
+                            </div>
+                            <span class="value" id="skybox-rotation-value">0.00 rad</span>
+                        </div>
+                        <div class="filter-group">
+                            <label>Face Width</label>
+                            <input type="range" id="skybox-width" min="16" max="4096" value="128" step="16">
+                            <div class="range-labels">
+                                <span>16</span>
+                                <span>1024</span>
+                                <span>2048</span>
+                                <span>4096</span>
+                            </div>
+                            <span class="value" id="skybox-width-value">128 px</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Filters tab -->
+                <div class="tab-content" id="tab-filters">
+                    <div class="filters-grid">
+                        <div class="filter-group">
+                            <label>
+                                <input type="checkbox" id="invert-check"> Invert
+                            </label>
+                        </div>
+                        <div class="filter-group">
+                            <label>Contrast</label>
+                            <input type="range" id="contrast-slider" min="-100" max="100" value="0" step="1">
+                            <div class="range-labels">
+                                <span>-100</span>
+                                <span>0</span>
+                                <span>+100</span>
+                            </div>
+                            <span class="value" id="contrast-value">0</span>
+                        </div>
+                        <div class="filter-group">
+                            <label>Brightness</label>
+                            <input type="range" id="brighten-slider" min="-255" max="255" value="0" step="1">
+                            <div class="range-labels">
+                                <span>-255</span>
+                                <span>0</span>
+                                <span>+255</span>
+                            </div>
+                            <span class="value" id="brighten-value">0</span>
+                        </div>
+                        <div class="filter-group">
+                            <label>Hue Rotate</label>
+                            <input type="range" id="hue-slider" min="0" max="360" value="0" step="1">
+                            <div class="range-labels">
+                                <span>0°</span>
+                                <span>180°</span>
+                                <span>360°</span>
+                            </div>
+                            <span class="value" id="hue-value">0°</span>
+                        </div>
+                    </div>
+                    <div class="panel-actions">
+                        <button class="btn btn-secondary" id="btn-reset-filters">↺ Reset</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3D View Overlay -->
+    <div class="overlay hidden" id="overlay">
+        <div class="overlay-header">
+            <h2>3D Preview</h2>
+            <button class="btn btn-secondary" id="btn-close-overlay">✕ Close</button>
+        </div>
+        <div id="skybox-viewer" style="width:100%;height:100%;position:relative;">
+            <div class="orbit-hint" id="orbit-hint">🖱️ click & drag to orbit</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import init, { apply_filters, skybox } from './pkg/skyboxer_wasm.js';
+
+        let wasmReady = false;
+        let originalBytes = null;
+        let baseSkyboxBytes = null;
+        let previewBytes = null;
+        let viewer3d = null;
+
+        const fileInput = document.getElementById('file-input');
+        const btnUpload = document.getElementById('btn-upload');
+        const uploadArea = document.getElementById('upload-area');
+        const statusEl = document.getElementById('status');
+        const workspace = document.getElementById('workspace');
+        const workspaceTitle = document.getElementById('workspace-title');
+        const previewImg = document.getElementById('preview-img');
+        const btn3dView = document.getElementById('btn-3d-view');
+        const btnDownload = document.getElementById('btn-download');
+        const overlay = document.getElementById('overlay');
+
+        const skyboxRotation = document.getElementById('skybox-rotation');
+        const skyboxWidth = document.getElementById('skybox-width');
+        const skyboxFormat = document.getElementById('skybox-format');
+        const enhanceCheck = document.getElementById('enhance-check');
+        const skyboxRotationValue = document.getElementById('skybox-rotation-value');
+        const skyboxWidthValue = document.getElementById('skybox-width-value');
+
+        const invertCheck = document.getElementById('invert-check');
+        const contrastSlider = document.getElementById('contrast-slider');
+        const brightenSlider = document.getElementById('brighten-slider');
+        const hueSlider = document.getElementById('hue-slider');
+        const contrastValue = document.getElementById('contrast-value');
+        const brightenValue = document.getElementById('brighten-value');
+        const hueValue = document.getElementById('hue-value');
+
+        (async () => {
+            await init();
+            wasmReady = true;
+        })();
+
+        function setStatus(type, msg) {
+            statusEl.className = 'status ' + type;
+            statusEl.textContent = msg;
+            statusEl.classList.remove('hidden');
+        }
+
+        function hideStatus() { statusEl.classList.add('hidden'); }
+
+        async function wasmToImage(wasmFn, ...args) {
+            const result = new Uint8Array(await wasmFn(...args));
+            previewBytes = result;
+            return URL.createObjectURL(new Blob([result], { type: 'image/png' }));
+        }
+
+        async function wasmToBytes(wasmFn, ...args) {
+            return new Uint8Array(await wasmFn(...args));
+        }
+
+        btnUpload.addEventListener('click', () => fileInput.click());
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            handleFile(file);
+        });
+
+        uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+        uploadArea.addEventListener('dragleave', () => { uploadArea.classList.remove('drag-over'); });
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('image/')) handleFile(file);
+        });
+
+        async function handleFile(file) {
+            hideStatus();
+            resetWorkspace();
+
+            try {
+                const buf = await file.arrayBuffer();
+                originalBytes = new Uint8Array(buf);
+
+                const url = URL.createObjectURL(new Blob([originalBytes], { type: file.type }));
+                previewImg.src = url;
+                previewImg.classList.remove('hidden');
+                workspaceTitle.textContent = file.name;
+                workspace.classList.remove('hidden');
+                uploadArea.classList.add('hidden');
+                document.body.classList.add('has-workspace');
+                document.querySelector('h1')?.classList.add('hidden');
+                document.querySelector('.subtitle')?.classList.add('hidden');
+
+                btnDownload.disabled = false;
+
+                // Auto-generate skybox for panoramas
+                const img = await new Promise((resolve, reject) => {
+                    const i = new Image();
+                    i.onload = () => resolve(i);
+                    i.onerror = reject;
+                    i.src = url;
+                });
+                
+                // Set default face width based on input image (use ~1/4 of width, capped at 2048)
+                const defaultFaceWidth = Math.min(4096, Math.max(16, Math.floor(img.naturalWidth / 4)));
+                skyboxWidth.value = defaultFaceWidth;
+                skyboxWidthValue.textContent = defaultFaceWidth + ' px';
+                
+                if (isPanorama(url)) {
+                    applySkybox();
+                }
+            } catch (e) {
+                setStatus('error', 'Failed to read file: ' + e.message);
+            }
+        }
+
+        function isPanorama(url) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => resolve(img.naturalWidth === img.naturalHeight * 2);
+                img.onerror = () => resolve(false);
+                img.src = url;
+            });
+        }
+
+        // ── Tab switching ──
+
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+            });
+        });
+
+        // ── Skybox ──
+
+        function resetSkybox() {
+            skyboxRotation.value = 0;
+            skyboxWidth.value = 128;
+            skyboxFormat.value = 'unity';
+            skyboxRotationValue.textContent = '0.00 rad';
+            skyboxWidthValue.textContent = '128 px';
+        }
+
+        async function applySkybox() {
+            if (!wasmReady || !originalBytes) return;
+
+            const rotation = parseFloat(skyboxRotation.value);
+            const maxWidth = parseInt(skyboxWidth.value);
+            const format = skyboxFormat.value;
+
+            skyboxRotationValue.textContent = rotation.toFixed(2) + ' rad';
+            skyboxWidthValue.textContent = maxWidth + ' px';
+
+            try {
+                const enhance = enhanceCheck.checked;
+                const result = await wasmToBytes(skybox, originalBytes, rotation, maxWidth, enhance, format);
+                previewBytes = result;
+                previewImg.src = URL.createObjectURL(new Blob([result], { type: 'image/png' }));
+                previewImg.classList.remove('hidden');
+                workspaceTitle.textContent = 'Skybox (' + format + ')';
+                baseSkyboxBytes = new Uint8Array(result);
+                btn3dView.disabled = false;
+                btnDownload.disabled = false;
+
+                // Re-apply active filters to the new skybox
+                applyFilters();
+            } catch (e) {
+                setStatus('error', 'Skybox error: ' + e.message);
+            }
+        }
+
+        skyboxRotation.addEventListener('input', () => {
+            skyboxRotationValue.textContent = parseFloat(skyboxRotation.value).toFixed(2) + ' rad';
+        });
+        skyboxWidth.addEventListener('input', () => {
+            skyboxWidthValue.textContent = skyboxWidth.value + ' px';
+        });
+        skyboxRotation.addEventListener('change', applySkybox);
+        skyboxWidth.addEventListener('change', applySkybox);
+        skyboxFormat.addEventListener('change', applySkybox);
+
+        // ── Filters ──
+
+        function resetFilters() {
+            invertCheck.checked = false;
+            contrastSlider.value = 0;
+            brightenSlider.value = 0;
+            hueSlider.value = 0;
+            contrastValue.textContent = '0';
+            brightenValue.textContent = '0';
+            hueValue.textContent = '0°';
+        }
+
+        async function applyFilters() {
+            if (!wasmReady || !baseSkyboxBytes) return;
+
+            const invert = invertCheck.checked;
+            const contrast = parseFloat(contrastSlider.value);
+            const brighten = parseInt(brightenSlider.value);
+            const hueRotate = parseInt(hueSlider.value);
+
+            contrastValue.textContent = contrast;
+            brightenValue.textContent = brighten;
+            hueValue.textContent = hueRotate + '°';
+
+            const anyActive = invert || contrast !== 0 || brighten !== 0 || hueRotate !== 0;
+
+            try {
+                if (!anyActive) {
+                    previewImg.src = URL.createObjectURL(new Blob([baseSkyboxBytes], { type: 'image/png' }));
+                    return;
+                }
+
+                previewImg.src = await wasmToImage(
+                    apply_filters,
+                    baseSkyboxBytes,
+                    invert,
+                    contrast,
+                    brighten,
+                    hueRotate
+                );
+            } catch (e) {
+                setStatus('error', 'Filter error: ' + e.message);
+            }
+        }
+
+        invertCheck.addEventListener('change', applyFilters);
+        contrastSlider.addEventListener('change', applyFilters);
+        brightenSlider.addEventListener('change', applyFilters);
+        hueSlider.addEventListener('change', applyFilters);
+
+        contrastSlider.addEventListener('input', () => { contrastValue.textContent = contrastSlider.value; });
+        brightenSlider.addEventListener('input', () => { brightenValue.textContent = brightenSlider.value; });
+        hueSlider.addEventListener('input', () => { hueValue.textContent = hueSlider.value + '°'; });
+
+        document.getElementById('btn-reset-filters').addEventListener('click', () => {
+            resetFilters();
+            applyFilters();
+        });
+
+        // ── Download ──
+
+        btnDownload.addEventListener('click', async () => {
+            const url = previewImg.src;
+            if (!url) return;
+            try {
+                const res = await fetch(url);
+                const blob = await res.blob();
+                const dl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = dl;
+                a.download = 'skybox.png';
+                a.click();
+                URL.revokeObjectURL(dl);
+            } catch (e) {
+                setStatus('error', 'Download error: ' + e.message);
+            }
+        });
+
+        // ── 3D View (fullscreen overlay) ──
+
+        btn3dView.addEventListener('click', async () => {
+            if (!previewImg.src) return;
+            overlay.classList.remove('hidden');
+            await createSkyboxViewer(previewImg.src);
+        });
+
+        document.getElementById('btn-close-overlay').addEventListener('click', () => {
+            overlay.classList.add('hidden');
+            cleanupViewer();
+        });
+
+        function cleanupViewer() {
+            if (!viewer3d) return;
+            viewer3d.controls.dispose();
+            viewer3d.textures.forEach(t => t.dispose());
+            const oldCanvas = viewer3d.renderer.domElement;
+            if (oldCanvas && oldCanvas.parentNode) oldCanvas.parentNode.removeChild(oldCanvas);
+            viewer3d.renderer.dispose();
+            viewer3d = null;
+        }
+
+        async function createSkyboxViewer(imageUrl) {
+            const container = document.getElementById('skybox-viewer');
+            if (!container) return;
+
+            const THREE = await import('three');
+            const { OrbitControls } = await import('three/addons/controls/OrbitControls.js');
+
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111111);
+
+            const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 10000);
+            camera.position.set(0, 0, -20);
+            camera.lookAt(0, 0, 0);
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableZoom = false;
+            controls.enablePan = false;
+            controls.target.set(0, 0, 0);
+            controls.update();
+
+            // Linear zoom via wheel
+            let zoomTarget = camera.position.distanceTo(controls.target);
+            renderer.domElement.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                zoomTarget += e.deltaY * 0.5;
+                zoomTarget = Math.max(0, Math.min(1000, zoomTarget));
+            }, { passive: false });
+
+            // Hide hint on interaction
+            const hint = document.getElementById('orbit-hint');
+            if (hint) {
+                const hideHint = () => { hint.style.display = 'none'; };
+                renderer.domElement.addEventListener('pointerdown', hideHint);
+                renderer.domElement.addEventListener('wheel', hideHint);
+            }
+
+            // Auto-orbit
+            const autoOrbitSpeed = 0.3;
+            const originalUpdate = controls.update.bind(controls);
+            controls.update = function () {
+                const angle = autoOrbitSpeed * (Math.PI / 180);
+                const offset = camera.position.clone().sub(controls.target);
+                const cos = Math.cos(angle);
+                const sin = Math.sin(angle);
+                const x = offset.x * cos - offset.z * sin;
+                const z = offset.x * sin + offset.z * cos;
+                offset.x = x;
+                offset.z = z;
+                camera.position.copy(controls.target).add(offset);
+                return originalUpdate();
+            };
+
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = imageUrl;
+            await new Promise((resolve) => { img.onload = resolve; });
+
+            const faceSize = img.width;
+            const format = skyboxFormat.value;
+            const textures = [];
+
+            if (format === 'unity') {
+                const u = img.width / 4;
+                const v = img.height / 3;
+                const crossMap = [
+                    { col: 2, row: 1 },  // +x (right)
+                    { col: 0, row: 1 },  // -x (left)
+                    { col: 1, row: 0 },  // +y (top)
+                    { col: 1, row: 2 },  // -y (bottom)
+                    { col: 1, row: 1 },  // +z (front)
+                    { col: 3, row: 1 },  // -z (back)
+                ];
+                for (const { col, row } of crossMap) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = u;
+                    canvas.height = v;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, col * u, row * v, u, v, 0, 0, u, v);
+                    const tex = new THREE.CanvasTexture(canvas);
+                    tex.colorSpace = THREE.SRGBColorSpace;
+                    textures.push(tex);
+                }
+            } else {
+                for (let i = 0; i < 6; i++) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = faceSize;
+                    canvas.height = faceSize;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, i * faceSize, faceSize, faceSize, 0, 0, faceSize, faceSize);
+                    const tex = new THREE.CanvasTexture(canvas);
+                    tex.colorSpace = THREE.SRGBColorSpace;
+                    textures.push(tex);
+                }
+            }
+
+            const geometry = new THREE.BoxGeometry(1000, 1000, 1000);
+            const materials = textures.map(tex =>
+                new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide })
+            );
+            const skybox = new THREE.Mesh(geometry, materials);
+            scene.add(skybox);
+
+            const gridHelper = new THREE.GridHelper(1000, 20, 0x444444, 0x222222);
+            gridHelper.position.y = -500;
+            scene.add(gridHelper);
+
+            if (viewer3d?.textures) viewer3d.textures.forEach(t => t.dispose());
+
+            viewer3d = { scene, camera, renderer, controls, textures };
+
+            function animate() {
+                requestAnimationFrame(animate);
+                if (overlay.classList.contains('hidden')) return;
+
+                // Apply zoom
+                const dir = camera.position.clone().sub(controls.target);
+                const currentDist = dir.length();
+                const newDist = currentDist + (zoomTarget - currentDist) * 0.15;
+                const newPos = controls.target.clone().add(dir.normalize().multiplyScalar(newDist));
+                camera.position.copy(newPos);
+
+                renderer.render(scene, camera);
+            }
+            animate();
+        }
+
+        // ── New / Reset ──
+
+        document.getElementById('btn-new').addEventListener('click', () => {
+            hideStatus();
+            resetWorkspace();
+            workspace.classList.add('hidden');
+            uploadArea.classList.remove('hidden');
+            document.body.classList.remove('has-workspace');
+            document.querySelector('h1')?.classList.remove('hidden');
+            document.querySelector('.subtitle')?.classList.remove('hidden');
+        });
+
+        function resetWorkspace() {
+            resetSkybox();
+            resetFilters();
+            previewImg.classList.add('hidden');
+            previewImg.src = '';
+            workspaceTitle.textContent = 'Skybox';
+            btn3dView.disabled = true;
+            btnDownload.disabled = true;
+            hideStatus();
+            fileInput.value = '';
+            previewBytes = null;
+            baseSkyboxBytes = null;
+        }
+    </script>
+</body>
+</html>
